@@ -27,6 +27,7 @@ class TemplateEngineFactory extends WireData implements Module, ConfigurableModu
         'engine' => '',
         'api_var' => 'view',
         'api_var_factory' => 'factory',
+        'cache_time_max' => 900,
         'registered_engines' => array(),
         'active' => true,
     );
@@ -78,7 +79,7 @@ class TemplateEngineFactory extends WireData implements Module, ConfigurableModu
             return;
         }
         $this->wire($this->get('api_var'), $engine);
-        $this->addHookAfter('Page::render', $this, 'hookRender', array('priority' => '100.01'));
+        $this->addHookAfter('PageRender::renderPage', $this, 'hookRender');
         // If the engine supports caching, attach hooks to clear the cache when saving/deleting pages
         if (in_array('TemplateEngineCache', class_implements($engine))) {
             $this->wire('pages')->addHookAfter('save', $this, 'hookClearCache');
@@ -103,20 +104,41 @@ class TemplateEngineFactory extends WireData implements Module, ConfigurableModu
 
 
     /**
-     * Method executed after Page::render()
+     * Method executed after PageRender::renderPage()
      * If we are in the admin or the factory is not active, return early
      *
      * @param HookEvent $event
      */
     public function hookRender(HookEvent $event)
     {
-        $page = $event->object;
-        if ($page->template == 'admin' || !$this->get('active')) {
-            return;
-        }
+        $argHook = $event->arguments(0);
+        $page = $argHook->object;
+        $pageRenderer = $event->object;
+
+        if ($page->template == 'admin' || !$this->get('active')) return;
+
         /** @var TemplateEngine $engine */
         $engine = $this->wire($this->get('api_var'));
-        $event->return = $engine->render();
+
+        $cacheAllowed = $pageRenderer->isCacheAllowed($page);
+        if ($cacheAllowed) {
+          // set cache header
+          $cacheTime = $page->template->cacheTime;
+          if ($cacheTime > $this->cache_time_max) $cacheTime = $this->cache_time_max;
+          header("Cache-Control: private, max-age={$cacheTime}");
+
+          $cacheFile = $pageRenderer->getCacheFile($page);
+          if ($data = $cacheFile->get() !== false) {
+            $event->return = $data;
+            return;
+          }
+        }
+
+        $data = $engine->render();
+        if ($data && $cacheAllowed && $cacheFile) $cacheFile->save($data);
+
+        $argHook->return = $data;
+        $event->arguments(0, $argHook);
     }
 
 
@@ -334,6 +356,15 @@ class TemplateEngineFactory extends WireData implements Module, ConfigurableModu
         $f->name = 'api_var_factory';
         $f->value = $data['api_var_factory'];
         $f->required = 1;
+        $wrapper->append($f);
+
+        /** @var InputfieldInteger $f */
+        $f = $modules->get('InputfieldInteger');
+        $f->label = __('Max Cache Time for Cache-Control Header');
+        $f->description = __('If caching is allowed, `max-age` is set to the Template CacheTime as long as it\'s lower than the value entered here.');
+        $f->notes = __('For example: 60 = 1 minute, 600 = 10 minutes, 3600 = 1 hour, 86400 = 1 day, 604800 = 1 week, 2419200 = 1 month.');
+        $f->name = 'cache_time_max';
+        $f->value = $data['cache_time_max'];
         $wrapper->append($f);
 
         return $wrapper;
