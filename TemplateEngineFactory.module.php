@@ -125,11 +125,12 @@ class TemplateEngineFactory extends WireData implements Module, ConfigurableModu
           // set cache header
           $cacheTime = $page->template->cacheTime;
           if ($cacheTime > $this->cache_time_max) $cacheTime = $this->cache_time_max;
-          header("Cache-Control: private, max-age={$cacheTime}");
+          header("Cache-Control: max-age={$cacheTime}");
 
           $cacheFile = $pageRenderer->getCacheFile($page);
-          if ($data = $cacheFile->get() !== false) {
-            $event->return = $data;
+          if (($data = $cacheFile->get()) !== false) {
+            $argHook->return = $data;
+            $event->arguments(0, $argHook);
             return;
           }
         }
